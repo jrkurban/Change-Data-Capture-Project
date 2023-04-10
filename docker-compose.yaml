@@ -1,0 +1,146 @@
+---
+version: "3.8"
+services:
+  zookeeper:
+    container_name: zookeeper
+    image: quay.io/debezium/zookeeper:2.0
+    ports:
+      - 2182:2181
+      - 2888:2888
+      - 3888:3888
+    networks:
+      - cdc
+  kafka:
+    container_name: kafka
+    image: quay.io/debezium/kafka:2.0
+    ports:
+      - 9292:9092
+    environment:
+      - ZOOKEEPER_CONNECT=zookeeper:2181
+    networks:
+      - cdc
+  connect:
+    container_name: connect
+    image: quay.io/debezium/connect:2.0
+    ports:
+      - 8083:8083
+    links:
+      - kafka
+      - postgres
+    networks:
+      - cdc
+    environment:
+      # Debezium image needs the topics below (and more for advanced settings)
+      - BOOTSTRAP_SERVERS=kafka:9092
+      - GROUP_ID=1 # group id of kafka connect cluster
+      - CONFIG_STORAGE_TOPIC=my_connect_configs # store connector configurations.
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets # store connector offsets.
+      - STATUS_STORAGE_TOPIC=my_connect_statuses # store connector status.
+  spark-master:
+    container_name: spark-master
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+    build: ./spark
+    ports:
+      - 4040:4040
+      - 7077:7077
+      - 8080:8080
+
+      - 18080:18080
+    networks:
+      - cdc
+    command: sh spark-master.sh
+  spark-worker-1:
+    container_name: spark-worker-1
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+    build: ./spark
+    depends_on:
+      - spark-master
+    ports:
+      - 8181-8182:8081
+    networks:
+      - cdc
+    command: sh spark-worker.sh
+  spark-worker-2:
+    container_name: spark-worker-2
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+    build: ./spark
+    depends_on:
+      - spark-master
+    ports:
+      - 8184-8185:8081
+    networks:
+      - cdc
+    command: sh spark-worker.sh
+  spark-client:
+    container_name: spark-client
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+    build: ./spark_client
+    ports:
+      - 8888:8888
+      - 4041:4040
+    networks:
+      - cdc
+    volumes:
+      - ./spark_client/examples:/opt/examples
+    command: sleep infinity
+  minio:
+    container_name: minio
+    deploy:
+        resources:
+            limits:
+              cpus: '1'
+              memory: "2g"
+    image: "minio/minio:RELEASE.2021-10-13T00-23-17Z"
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - cdc
+    environment:
+      MINIO_ACCESS_KEY: "dataops"
+      MINIO_SECRET_KEY: "Ankara06"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+  postgres:
+    container_name: postgres
+    image: quay.io/debezium/example-postgres:2.0
+    ports:
+      - 5433:5432
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./spark_client/examples:/opt/examples
+    networks:
+      - cdc
+volumes:
+  kafka:
+  connect_config:
+  connect_data:
+  minio:
+  postgres:
+networks:
+  cdc:
+
